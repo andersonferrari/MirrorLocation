@@ -4,6 +4,7 @@ using OpenCvSharp;
 using Rug.Osc;
 using System;
 using System.Collections.Generic;
+using System.Configuration;
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -15,6 +16,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Rectangle = System.Windows.Shapes.Rectangle;
+using Microsoft.Extensions.Configuration;
 
 namespace OnnxObjectDetectionApp
 {
@@ -29,10 +31,36 @@ namespace OnnxObjectDetectionApp
 
         private static readonly string modelsDirectory = Path.Combine(Environment.CurrentDirectory, @"ML\OnnxModels");
 
+        public ConfigParameters ConfigOptions { get; set; }
+        public List<RectangleF> Quadrants = new List<RectangleF>();
+
+        private IPAddress Address = IPAddress.Parse("127.0.0.1");
+        private int Port = 5005;
+        private readonly object currentLocationLock = new object();
+        private static int TimeToStationary = 30000; 
+        private static System.Timers.Timer TimerStationary = new System.Timers.Timer(TimeToStationary);
+        private static int currentMirrorLocation = -1;
+
         public MainWindow()
         {
             InitializeComponent();
             LoadModel();
+            var GetConfiguration = new ConfigurationBuilder()
+                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true).Build();
+            ConfigOptions = GetConfiguration.Get<ConfigParameters>();
+
+            foreach (var box in ConfigOptions.Quadrants)
+            {
+                Quadrants.Add(new RectangleF(box.X, box.Y, box.W, box.H));
+            }
+            if (!String.IsNullOrEmpty(ConfigOptions.OscCom.Ip))
+            {
+                Address = IPAddress.Parse(ConfigOptions.OscCom.Ip);
+            }
+            if (ConfigOptions.OscCom.Port > 0)
+            {
+                Port = ConfigOptions.OscCom.Port;
+            }
         }
 
         protected override void OnActivated(EventArgs e)
@@ -40,9 +68,9 @@ namespace OnnxObjectDetectionApp
             base.OnActivated(e);
             StartCameraCapture();
             // mirror timers
-            timerStationary.Elapsed += OnTimedEvent;
-            timerStationary.AutoReset = true;
-            timerStationary.Enabled = true;
+            TimerStationary.Elapsed += OnTimedEvent;
+            TimerStationary.AutoReset = true;
+            TimerStationary.Enabled = true;
         }
 
         protected override void OnDeactivated(EventArgs e)
@@ -208,10 +236,6 @@ namespace OnnxObjectDetectionApp
             }
         }
 
-        private readonly object currentLocationLock = new object();
-        private static int timeToStationary = 8000; //TODO: test this time
-        private static System.Timers.Timer timerStationary = new System.Timers.Timer(timeToStationary);
-        private static int currentMirrorLocation = -1;
         private void OnTimedEvent(Object source, System.Timers.ElapsedEventArgs e)
         {
             lock (currentLocationLock)
@@ -229,16 +253,16 @@ namespace OnnxObjectDetectionApp
             //timerStationary.AutoReset = true;
             //timerStationary.Enabled = true;
 
-            List<RectangleF> quadrants = new List<RectangleF>();
-            //TODO? define quadrants
-            quadrants.Add(new RectangleF(0, 0, 250, 1000));
-            quadrants.Add(new RectangleF(0, 0, 1000, 1000));
-            quadrants.Add(new RectangleF(0, 260, 100, 100));
-            quadrants.Add(new RectangleF(0, 300, 500, 100));
-            for (var i=0;i<quadrants.Count();i++){
-                if (quadrants[i].Contains((float)mirrorX, (float)mirrorY))
+            //List<RectangleF> quadrants = new List<RectangleF>();
+            ////TODO? define quadrants
+            //quadrants.Add(new RectangleF(0, 0, 250, 1000));
+            //quadrants.Add(new RectangleF(0, 0, 1000, 1000));
+            //quadrants.Add(new RectangleF(0, 260, 100, 100));
+            //quadrants.Add(new RectangleF(0, 300, 500, 100));
+            for (var i=0;i<Quadrants.Count();i++){
+                if (Quadrants[i].Contains((float)mirrorX, (float)mirrorY))
                 {
-                    timerStationary.Enabled = true; //restart the timer if some object was fund
+                    TimerStationary.Enabled = true; //restart the timer if some object was fund
                     if (i != currentMirrorLocation)
                     {
                         broadcastNewLocation(i);
@@ -251,18 +275,17 @@ namespace OnnxObjectDetectionApp
                 }
             }
         }
-        private IPAddress address = IPAddress.Parse("127.0.0.1");
-        private int port = 5005;
+
         private void broadcastNewLocation(int i)
         {
             System.Console.WriteLine($"Position: {i}");
             //labelSensor.Content = $"Sensor: {i}";
   
-            using (OscSender sender = new OscSender(address, port))
+            using (OscSender sender = new OscSender(Address, Port))
             {
                 sender.Connect();
 
-                sender.Send(new OscMessage("/test",i));
+                sender.Send(new OscMessage("/quadrant",i));
             }
         }
     }
